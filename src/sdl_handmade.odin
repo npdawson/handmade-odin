@@ -9,4 +9,6 @@ main :: proc() {
 		fmt.eprintfln("SDL Init error: %v", sdl.GetError())
 		panic("Could not initialize SDL!")
 	}
+
+	sdl.ShowSimpleMessageBox({.INFORMATION}, "Handmade Odin", "This is Handmade Odin.", nil)
 }
