@@ -1,8 +1,12 @@
 package handmade
 
-import "vendor:sdl3"
+import "core:fmt"
 
-when PLATFORM == "SDL" {
+import sdl "vendor:sdl3"
 
-main :: proc() {}
+main :: proc() {
+	if ok := sdl.Init({.VIDEO}); !ok {
+		fmt.eprintfln("SDL Init error: %v", sdl.GetError())
+		panic("Could not initialize SDL!")
+	}
 }
