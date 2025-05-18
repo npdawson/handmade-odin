@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-flags="-out:build/handmade"
+platform="SDL"
+
+flags="-out:build/handmade -define:PLATFORM=${platform}"
 
 if [[ $1 == "run" ]] then
 	shift

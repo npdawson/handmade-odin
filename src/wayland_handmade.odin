@@ -1,4 +1,7 @@
+#+build linux
 package handmade
+
+PLATFORM :: #config(PLATFORM, "")
 
 import "base:runtime"
 import "core:fmt"
@@ -8,6 +11,7 @@ import "core:sys/posix"
 import wl "shared:wayland"
 import "shared:wayland/xdg"
 
+when PLATFORM == "WAYLAND"  {
 main :: proc() {
 	global_context = context
 
@@ -41,8 +45,6 @@ main :: proc() {
 	xdg.toplevel_decoration_v1_add_listener(deco_toplevel, &deco_toplevel_listener, nil)
 	xdg.toplevel_decoration_v1_set_mode(deco_toplevel, .server_side)
 
-	// wl.buffer_add_listener(window.buffer, &buffer_listener, nil)
-
 	for wl.display_dispatch(window.display) != 0 {
 		if window.closed do break
 		wl.surface_commit(window.surface)
@@ -52,18 +54,17 @@ main :: proc() {
 }
 
 window: struct {
-	display:      ^wl.display,
-	surface:      ^wl.surface,
-	compositor:   ^wl.compositor,
-	shm:          ^wl.shm,
-	xdg_surface:  ^xdg.surface,
-	wm_base:      ^xdg.wm_base,
-	toplevel:     ^xdg.toplevel,
-	deco_manager: ^xdg.decoration_manager_v1,
-	buffer:       ^wl.buffer,
-
-	width, height:	int,
-	closed:			bool,
+	display:       ^wl.display,
+	surface:       ^wl.surface,
+	compositor:    ^wl.compositor,
+	shm:           ^wl.shm,
+	xdg_surface:   ^xdg.surface,
+	wm_base:       ^xdg.wm_base,
+	toplevel:      ^xdg.toplevel,
+	deco_manager:  ^xdg.decoration_manager_v1,
+	buffer:        ^wl.buffer,
+	width, height: int,
+	closed:        bool,
 }
 
 registry_listener := wl.registry_listener {
@@ -125,7 +126,7 @@ surface_configure :: proc "c" (data: rawptr, surface: ^xdg.surface, serial: uint
 
 toplevel_listener := xdg.toplevel_listener {
 	configure = toplevel_configure,
-	close = toplevel_close,
+	close     = toplevel_close,
 }
 
 toplevel_configure :: proc "c" (
@@ -206,4 +207,6 @@ buffer_listener := wl.buffer_listener {
 
 buffer_release :: proc "c" (data: rawptr, buffer: ^wl.buffer) {
 	wl.buffer_destroy(buffer)
+}
+
 }
