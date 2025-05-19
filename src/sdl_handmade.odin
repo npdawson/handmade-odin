@@ -10,14 +10,14 @@ main :: proc() {
 		panic("Could not initialize SDL!")
 	}
 
-	window := sdl.CreateWindow("Handmade Odin", 800, 600, nil)
+	window := sdl.CreateWindow("Handmade Odin", 800, 600, {.RESIZABLE})
 	if window == nil {
 		fmt.eprintfln("SDL CreateWindow error: %v", sdl.GetError())
 		panic("Could not create window")
 	}
 	defer sdl.DestroyWindow(window)
 
-	surface := sdl.CreateSurface(800, 600, sdl.PixelFormat.RGBA32)
+	surface := sdl.CreateSurface(800, 600, .RGBA32)
 	screen_surface := sdl.GetWindowSurface(window)
 
 	running := true
@@ -25,13 +25,19 @@ main :: proc() {
 		event: sdl.Event
 		if sdl.PollEvent(&event) {
 			#partial switch event.type {
-			case .WINDOW_CLOSE_REQUESTED, .QUIT:
+			case .WINDOW_CLOSE_REQUESTED, .QUIT, .WINDOW_DESTROYED:
 				running = false
+			case .WINDOW_RESIZED:
+				width := event.window.data1
+				height := event.window.data2
+				sdl.DestroySurface(surface)
+				surface = sdl.CreateSurface(width, height, .RGBA32)
+				screen_surface = sdl.GetWindowSurface(window)
 			}
 		}
 
-		sdl.ClearSurface(surface, 0.5, 1.0, 1.0, sdl.ALPHA_OPAQUE_FLOAT)
-		sdl.BlitSurface(surface, nil, screen_surface, nil)
+		sdl.ClearSurface(surface, 0.5, 0.8, 1.0, sdl.ALPHA_OPAQUE_FLOAT)
+		sdl.BlitSurfaceScaled(surface, nil, screen_surface, nil, .NEAREST)
 		sdl.UpdateWindowSurface(window)
 	}
 }
