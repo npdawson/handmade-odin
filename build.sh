@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-platform="SDL"
+platform="X11"
 
 flags="-out:build/handmade -define:PLATFORM=${platform}"
 

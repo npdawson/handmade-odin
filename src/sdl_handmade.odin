@@ -4,6 +4,7 @@ import "core:fmt"
 
 import sdl "vendor:sdl3"
 
+when PLATFORM == "SDL" {
 main :: proc() {
 	if ok := sdl.Init({.VIDEO}); !ok {
 		fmt.eprintfln("SDL Init error: %v", sdl.GetError())
@@ -40,4 +41,6 @@ main :: proc() {
 		sdl.BlitSurfaceScaled(surface, nil, screen_surface, nil, .NEAREST)
 		sdl.UpdateWindowSurface(window)
 	}
+}
+
 }

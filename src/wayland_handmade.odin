@@ -8,8 +8,8 @@ import "core:fmt"
 import "core:sys/linux"
 import "core:sys/posix"
 
-import wl "shared:wayland"
-import "shared:wayland/xdg"
+// import wl "shared:wayland"
+// import "shared:wayland/xdg"
 
 when PLATFORM == "WAYLAND"  {
 main :: proc() {
