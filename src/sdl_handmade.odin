@@ -4,6 +4,8 @@ import "core:fmt"
 
 import sdl "vendor:sdl3"
 
+PLATFORM :: #config(PLATFORM, "")
+
 when PLATFORM == "SDL" {
 main :: proc() {
 	if ok := sdl.Init({.VIDEO}); !ok {

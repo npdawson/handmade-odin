@@ -1,25 +1,38 @@
 #+build linux
 package handmade
 
-PLATFORM :: #config(PLATFORM, "")
-
 import "base:runtime"
 import "core:fmt"
 import "core:sys/linux"
 import "core:sys/posix"
 
-// import wl "shared:wayland"
-// import "shared:wayland/xdg"
+import wl "shared:wayland"
+import "shared:wayland/xdg"
 
-when PLATFORM == "WAYLAND"  {
+window: struct {
+	display:       ^wl.display,
+	surface:       ^wl.surface,
+	compositor:    ^wl.compositor,
+	shm:           ^wl.shm,
+	xdg_surface:   ^xdg.surface,
+	wm_base:       ^xdg.wm_base,
+	toplevel:      ^xdg.toplevel,
+	deco_manager:  ^xdg.decoration_manager_v1,
+	buffer:        ^wl.buffer,
+	width, height: int,
+	closed:        bool,
+}
+
 main :: proc() {
-	global_context = context
-
 	window.width = 800
 	window.height = 600
 
 	window.display = wl.display_connect(nil)
-	if window.display == nil {panic("Could not connect to wayland display")}
+	if window.display == nil {
+		fmt.println("Could not connect to wayland display")
+		x11_main()
+		return
+	}
 	defer wl.display_disconnect(window.display)
 
 	registry := wl.display_get_registry(window.display)
@@ -53,26 +66,10 @@ main :: proc() {
 	}
 }
 
-window: struct {
-	display:       ^wl.display,
-	surface:       ^wl.surface,
-	compositor:    ^wl.compositor,
-	shm:           ^wl.shm,
-	xdg_surface:   ^xdg.surface,
-	wm_base:       ^xdg.wm_base,
-	toplevel:      ^xdg.toplevel,
-	deco_manager:  ^xdg.decoration_manager_v1,
-	buffer:        ^wl.buffer,
-	width, height: int,
-	closed:        bool,
-}
-
 registry_listener := wl.registry_listener {
 	global        = registry_global,
 	global_remove = registry_global_remove,
 }
-
-global_context: runtime.Context
 
 registry_global :: proc "c" (
 	data: rawptr,
@@ -81,7 +78,7 @@ registry_global :: proc "c" (
 	interface: cstring,
 	version: uint,
 ) {
-	context = global_context
+	context = runtime.default_context()
 	switch interface {
 	case wl.compositor_interface.name:
 		window.compositor =
@@ -117,7 +114,7 @@ surface_listener := xdg.surface_listener {
 }
 
 surface_configure :: proc "c" (data: rawptr, surface: ^xdg.surface, serial: uint) {
-	context = global_context
+	context = runtime.default_context()
 	xdg.surface_ack_configure(surface, serial)
 	window.buffer = create_frame_buffer()
 	wl.surface_attach(window.surface, window.buffer, 0, 0)
@@ -207,6 +204,4 @@ buffer_listener := wl.buffer_listener {
 
 buffer_release :: proc "c" (data: rawptr, buffer: ^wl.buffer) {
 	wl.buffer_destroy(buffer)
-}
-
 }

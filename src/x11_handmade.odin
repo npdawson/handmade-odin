@@ -1,3 +1,4 @@
+#+build linux
 package handmade
 
 import "core:fmt"
@@ -21,8 +22,8 @@ Buffer :: struct {
 	pitch:  u32,
 }
 
-// TODO: merge X11 and Wayland platform layers
-main :: proc() {
+// TODO: better merge X11 and Wayland platform layers
+x11_main :: proc() {
 	display := X.OpenDisplay(nil)
 	root_window := X.DefaultRootWindow(display)
 
