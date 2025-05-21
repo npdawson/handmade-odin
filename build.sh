@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 
-platform="X11"
-
-flags="-out:build/handmade -define:PLATFORM=${platform}"
+flags="-out:build/handmade"
 
 if [[ $1 == "run" ]] then
 	shift
