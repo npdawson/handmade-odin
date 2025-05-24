@@ -25,10 +25,11 @@ Window :: struct {
 	shm:                                 ^wl.shm,
 	frame:                               ^decor.frame,
 	state:                               decor.window_state,
-	buffer:                              ^Buffer,
 	configured_width, configured_height: int,
 	content_width, content_height:       int,
 	floating_width, floating_height:     int,
+	last_frame:                          uint,
+	offset:                              f64,
 	running:                             bool,
 }
 
@@ -62,14 +63,10 @@ main :: proc() {
 	decor.frame_set_title(window.frame, "Handmade Odin")
 	decor.frame_map(window.frame)
 
-	timeout := 16 // TODO: is this milliseconds?
-	for window.running {
-		if decor.dispatch(decor_instance, timeout) < 0 {
-			os.exit(1)
-		}
-		blue_offset += 1
-		green_offset += 2
-		// redraw(&window)
+	cb := wl.surface_frame(window.surface)
+	wl.callback_add_listener(cb, &frame_listener, &window)
+
+	for decor.dispatch(decor_instance, -1) >= 0 {
 	}
 
 }
@@ -119,14 +116,14 @@ handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration,
 		window.floating_height = height
 	}
 
-	resize(window)
-	redraw(window)
+	draw_frame(window)
 }
 
 handle_close :: proc "c" (frame: ^decor.frame, data: rawptr) {
 	// context = runtime.default_context()
-	window := cast(^Window)data
-	window.running = false
+	// window := cast(^Window)data
+	// window.running = false
+	os.exit(0)
 }
 
 handle_commit :: proc "c" (frame: ^decor.frame, data: rawptr) {
@@ -202,17 +199,12 @@ create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
 	return buffer
 }
 
-resize :: proc(window: ^Window) {
-	// linux.munmap(window.buffer.data, window.buffer.size)
-	// wl.buffer_destroy(window.buffer.wl_buffer)
-	// free(window.buffer)
-	window.buffer = create_shm_buffer(window)
-}
+draw_frame :: proc(window: ^Window) {
+	buffer := create_shm_buffer(window)
 
-redraw :: proc(window: ^Window) {
-	paint_buffer(window.buffer, window)
+	paint_buffer(buffer, window)
 
-	wl.surface_attach(window.surface, window.buffer.wl_buffer, 0, 0)
+	wl.surface_attach(window.surface, buffer.wl_buffer, 0, 0)
 	wl.surface_damage_buffer(
 		window.surface,
 		0,
@@ -223,10 +215,35 @@ redraw :: proc(window: ^Window) {
 	wl.surface_commit(window.surface)
 }
 
-blue_offset := 0
-green_offset := 0
+frame_done :: proc "c" (data: rawptr, cb: ^wl.callback, time: uint) {
+	context = runtime.default_context()
+	// destroy the old callback
+	wl.callback_destroy(cb)
+	// and create a new one
+	window := cast(^Window)data
+	new_cb := wl.surface_frame(window.surface)
+	wl.callback_add_listener(new_cb, &frame_listener, window)
+
+	// update at specific delta time
+	if window.last_frame != 0 {
+		elapsed := time - window.last_frame
+		window.offset += f64(elapsed) / 1000 * 24 // 24 pixels? per second
+	}
+
+	// submit a frame
+	draw_frame(window)
+
+	window.last_frame = time
+}
+
+frame_listener := wl.callback_listener {
+	done = frame_done,
+}
+
 paint_buffer :: proc(buffer: ^Buffer, window: ^Window) {
 	pixels := slice.from_ptr(cast([^]u32)buffer.data, int(buffer.size / 4))
+	blue_offset := int(window.offset)
+	green_offset := int(window.offset) * 2
 	// draw gradient
 	for y in 0 ..< window.configured_height {
 		for x in 0 ..< window.configured_width {
