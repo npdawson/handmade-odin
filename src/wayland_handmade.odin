@@ -25,6 +25,8 @@ Window :: struct {
 	shm:                                 ^wl.shm,
 	frame:                               ^decor.frame,
 	state:                               decor.window_state,
+	resize:                              bool,
+	buffer:                              ^Buffer,
 	configured_width, configured_height: int,
 	content_width, content_height:       int,
 	floating_width, floating_height:     int,
@@ -116,6 +118,7 @@ handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration,
 		window.floating_height = height
 	}
 
+	window.resize = true
 	draw_frame(window)
 }
 
@@ -157,6 +160,7 @@ registry_global :: proc "c" (
 registry_global_remove :: proc "c" (data: rawptr, registry: ^wl.registry, name: uint) {}
 
 create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
+	if !window.resize { return window.buffer }
 	stride := window.configured_width * 4
 	size := stride * window.configured_height
 
@@ -196,6 +200,8 @@ create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
 	)
 
 	wl.buffer_add_listener(buffer.wl_buffer, &buffer_listener, buffer)
+	window.resize = false
+	window.buffer = buffer
 	return buffer
 }
 
@@ -247,10 +253,10 @@ paint_buffer :: proc(buffer: ^Buffer, window: ^Window) {
 	// draw gradient
 	for y in 0 ..< window.configured_height {
 		for x in 0 ..< window.configured_width {
-			blue := u8(x + blue_offset)
-			green := u8(y + green_offset)
 			index := y * window.configured_width + x
-			pixels[index] = u32(green) << 8 | u32(blue)
+			blue := (x + blue_offset) & 0xff
+			green := (y + green_offset) & 0xff
+			pixels[index] = u32(green << 8 | blue)
 			// if (x + y / 16 * 16) % 32 < 16 do pixels[index] = 0xff666666
 			// else do pixels[index] = 0xffeeeeee
 		}
