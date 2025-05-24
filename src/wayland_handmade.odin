@@ -2,30 +2,40 @@
 package handmade
 
 import "base:runtime"
+
 import "core:fmt"
+import "core:os"
+import "core:slice"
 import "core:sys/linux"
 import "core:sys/posix"
 
 import wl "shared:wayland"
-import "shared:wayland/xdg"
+import decor "shared:wayland/ext/libdecor"
 
-window: struct {
-	display:       ^wl.display,
-	surface:       ^wl.surface,
-	compositor:    ^wl.compositor,
-	shm:           ^wl.shm,
-	xdg_surface:   ^xdg.surface,
-	wm_base:       ^xdg.wm_base,
-	toplevel:      ^xdg.toplevel,
-	deco_manager:  ^xdg.decoration_manager_v1,
-	buffer:        ^wl.buffer,
-	width, height: int,
-	closed:        bool,
+Buffer :: struct {
+	wl_buffer: ^wl.buffer,
+	data:      rawptr,
+	size:      uint,
+}
+
+Window :: struct {
+	display:                             ^wl.display,
+	surface:                             ^wl.surface,
+	compositor:                          ^wl.compositor,
+	shm:                                 ^wl.shm,
+	frame:                               ^decor.frame,
+	state:                               decor.window_state,
+	configured_width, configured_height: int,
+	content_width, content_height:       int,
+	floating_width, floating_height:     int,
 }
 
 main :: proc() {
-	window.width = 800
-	window.height = 600
+	window: Window
+	window.configured_width = 800
+	window.configured_height = 600
+	window.floating_width = 800
+	window.floating_height = 600
 
 	window.display = wl.display_connect(nil)
 	if window.display == nil {
@@ -36,34 +46,85 @@ main :: proc() {
 	defer wl.display_disconnect(window.display)
 
 	registry := wl.display_get_registry(window.display)
-	wl.registry_add_listener(registry, &registry_listener, nil)
+	wl.registry_add_listener(registry, &registry_listener, &window)
+	wl.display_roundtrip(window.display)
+	// TODO: do we need a 2nd roundtrip?
 	wl.display_roundtrip(window.display)
 
 	window.surface = wl.compositor_create_surface(window.compositor)
 	defer wl.surface_destroy(window.surface)
 
-	xdg.wm_base_add_listener(window.wm_base, &wm_base_listener, nil)
-	window.xdg_surface = xdg.wm_base_get_xdg_surface(window.wm_base, window.surface)
-	defer xdg.surface_destroy(window.xdg_surface)
+	decor_instance := decor.new(window.display, &iface)
+	window.frame = decor.decorate(decor_instance, window.surface, &frame_iface, &window)
 
-	xdg.surface_add_listener(window.xdg_surface, &surface_listener, nil)
-	window.toplevel = xdg.surface_get_toplevel(window.xdg_surface)
-	xdg.toplevel_add_listener(window.toplevel, &toplevel_listener, nil)
-	xdg.toplevel_set_title(window.toplevel, "Hellope from Odin!")
+	decor.frame_set_app_id(window.frame, "handmade-libdecor")
+	decor.frame_set_title(window.frame, "Handmade Odin")
+	decor.frame_map(window.frame)
 
-	deco_toplevel := xdg.decoration_manager_v1_get_toplevel_decoration(
-		window.deco_manager,
-		window.toplevel,
-	)
-	xdg.toplevel_decoration_v1_add_listener(deco_toplevel, &deco_toplevel_listener, nil)
-	xdg.toplevel_decoration_v1_set_mode(deco_toplevel, .server_side)
-
-	for wl.display_dispatch(window.display) != 0 {
-		if window.closed do break
-		wl.surface_commit(window.surface)
-
+	for decor.dispatch(decor_instance, -1) >= 0 {
 
 	}
+}
+
+iface := decor.interface {
+	error = handle_error,
+}
+
+handle_error :: proc "c" (instance: ^decor.instance, error: decor.error, message: cstring) {
+	context = runtime.default_context()
+	fmt.eprintfln("libdecor error (%v): %v", error, message)
+	os.exit(1)
+}
+
+frame_iface := decor.frame_interface {
+	configure = handle_configure,
+	close     = handle_close,
+	commit    = handle_commit,
+}
+
+handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration, data: rawptr) {
+	context = runtime.default_context()
+	width, height: int
+	window_state: decor.window_state
+	window := cast(^Window)data
+
+	if ok := decor.configuration_get_window_state(config, &window_state); !ok {
+		fmt.eprintfln("couldn't get window state: %v", window_state)
+	}
+
+	window.state = window_state
+
+	if ok := decor.configuration_get_content_size(config, frame, &width, &height); !ok {
+		width = window.content_width
+		height = window.content_height
+	}
+
+	width = (width == 0) ? window.floating_width : width
+	height = (height == 0) ? window.floating_height : height
+
+	window.configured_width = width
+	window.configured_height = height
+
+	state := decor.state_new(width, height)
+	decor.frame_commit(frame, state, config)
+	decor.state_free(state)
+
+	if decor.frame_is_floating(frame) {
+		window.floating_width = width
+		window.floating_height = height
+	}
+
+	redraw(window)
+}
+
+handle_close :: proc "c" (frame: ^decor.frame, data: rawptr) {
+	context = runtime.default_context()
+	os.exit(0)
+}
+
+handle_commit :: proc "c" (frame: ^decor.frame, data: rawptr) {
+	window := cast(^Window)data
+	wl.surface_commit(window.surface)
 }
 
 registry_listener := wl.registry_listener {
@@ -79,73 +140,21 @@ registry_global :: proc "c" (
 	version: uint,
 ) {
 	context = runtime.default_context()
+	window := cast(^Window)data
 	switch interface {
 	case wl.compositor_interface.name:
 		window.compositor =
 		cast(^wl.compositor)wl.registry_bind(registry, name, &wl.compositor_interface, 6)
 	case wl.shm_interface.name:
 		window.shm = cast(^wl.shm)wl.registry_bind(registry, name, &wl.shm_interface, 1)
-	case xdg.wm_base_interface.name:
-		window.wm_base =
-		cast(^xdg.wm_base)wl.registry_bind(registry, name, &xdg.wm_base_interface, 1)
-	case xdg.decoration_manager_v1_interface.name:
-		window.deco_manager =
-		cast(^xdg.decoration_manager_v1)wl.registry_bind(
-			registry,
-			name,
-			&xdg.decoration_manager_v1_interface,
-			1,
-		)
 	}
 }
 
 registry_global_remove :: proc "c" (data: rawptr, registry: ^wl.registry, name: uint) {}
 
-wm_base_listener := xdg.wm_base_listener {
-	ping = wm_base_ping,
-}
-
-wm_base_ping :: proc "c" (data: rawptr, wm_base: ^xdg.wm_base, serial: uint) {
-	xdg.wm_base_pong(wm_base, serial)
-}
-
-surface_listener := xdg.surface_listener {
-	configure = surface_configure,
-}
-
-surface_configure :: proc "c" (data: rawptr, surface: ^xdg.surface, serial: uint) {
-	context = runtime.default_context()
-	xdg.surface_ack_configure(surface, serial)
-	window.buffer = create_frame_buffer()
-	wl.surface_attach(window.surface, window.buffer, 0, 0)
-	wl.surface_commit(window.surface)
-}
-
-toplevel_listener := xdg.toplevel_listener {
-	configure = toplevel_configure,
-	close     = toplevel_close,
-}
-
-toplevel_configure :: proc "c" (
-	data: rawptr,
-	toplevel: ^xdg.toplevel,
-	width, height: int,
-	states: xdg.array,
-) {
-	if width == 0 || height == 0 do return
-	window.width = width
-	window.height = height
-}
-
-toplevel_close :: proc "c" (data: rawptr, toplevel: ^xdg.toplevel) {
-	window.closed = true
-}
-
-create_frame_buffer :: proc() -> ^wl.buffer {
-	width := window.width
-	height := window.height
-	stride := width * 4
-	size := stride * height
+create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
+	stride := window.configured_width * 4
+	size := stride * window.configured_height
 
 	name := fmt.caprintf("/wl_shm_%v", cast(uintptr)window.display) // needs to be random?
 	fd := posix.shm_open(name, {.RDWR, .CREAT, .EXCL}, {.IRUSR, .IWUSR})
@@ -163,45 +172,65 @@ create_frame_buffer :: proc() -> ^wl.buffer {
 	}
 
 	data_raw, err := linux.mmap(0, uint(size), {.READ, .WRITE}, {.SHARED}, auto_cast fd, 0)
-	defer linux.munmap(data_raw, uint(size))
 	if err != .NONE {
 		fmt.eprintln("error: couldn't map shared memory")
 		return nil
 	}
 
-	data := cast([^]u32)data_raw
+	buffer := new(Buffer)
+	buffer.data = data_raw
+	buffer.size = uint(size)
 	pool := wl.shm_create_pool(window.shm, auto_cast fd, size)
 	defer wl.shm_pool_destroy(pool)
-	buffer := wl.shm_pool_create_buffer(pool, 0, width, height, stride, .xrgb8888)
-	// draw checkerboard background
-	for y in 0 ..< height {
-		for x in 0 ..< width {
-			index := y * width + x
-			if (x + y / 16 * 16) % 32 < 16 do data[index] = 0xff666666
-			else do data[index] = 0xffeeeeee
-		}
-	}
+	buffer.wl_buffer = wl.shm_pool_create_buffer(
+		pool,
+		0,
+		window.configured_width,
+		window.configured_height,
+		stride,
+		.xrgb8888,
+	)
 
-	wl.buffer_add_listener(buffer, &buffer_listener, nil)
+	wl.buffer_add_listener(buffer.wl_buffer, &buffer_listener, buffer)
 	return buffer
 }
 
-deco_toplevel_listener := xdg.toplevel_decoration_v1_listener {
-	configure = deco_toplevel_configure,
+redraw :: proc(window: ^Window) {
+	buffer := create_shm_buffer(window)
+
+	paint_buffer(buffer, window)
+
+	wl.surface_attach(window.surface, buffer.wl_buffer, 0, 0)
+	wl.surface_damage_buffer(
+		window.surface,
+		0,
+		0,
+		window.configured_width,
+		window.configured_height,
+	)
+	wl.surface_commit(window.surface)
 }
 
-deco_toplevel_configure :: proc "c" (
-	data: rawptr,
-	toplevel: ^xdg.toplevel_decoration_v1,
-	mode: xdg.toplevel_decoration_v1_mode,
-) {
-
+paint_buffer :: proc(buffer: ^Buffer, window: ^Window) {
+	pixels := slice.from_ptr(cast([^]u32)buffer.data, int(buffer.size / 4))
+	// draw checkerboard background
+	for y in 0 ..< window.configured_height {
+		for x in 0 ..< window.configured_width {
+			index := y * window.configured_width + x
+			if (x + y / 16 * 16) % 32 < 16 do pixels[index] = 0xff666666
+			else do pixels[index] = 0xffeeeeee
+		}
+	}
 }
 
 buffer_listener := wl.buffer_listener {
 	release = buffer_release,
 }
 
-buffer_release :: proc "c" (data: rawptr, buffer: ^wl.buffer) {
-	wl.buffer_destroy(buffer)
+buffer_release :: proc "c" (data: rawptr, wl_buffer: ^wl.buffer) {
+	context = runtime.default_context()
+	buffer: ^Buffer = auto_cast data
+	linux.munmap(buffer.data, buffer.size)
+	wl.buffer_destroy(buffer.wl_buffer)
+	free(buffer)
 }

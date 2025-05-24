@@ -14,7 +14,7 @@ Entity :: struct {
 	width, height: u32,
 }
 
-Buffer :: struct {
+XBuffer :: struct {
 	memory: []u8,
 	size:   u64,
 	width:  u32,
@@ -76,7 +76,7 @@ x11_main :: proc() {
 	bits_per_pixel: u32 = 32
 	bytes_per_pixel := bits_per_pixel / 8
 
-	buffer := Buffer{}
+	buffer := XBuffer{}
 	buffer.width = window_width
 	buffer.height = window_height
 	buffer.pitch = buffer.width * bytes_per_pixel
@@ -174,7 +174,7 @@ x11_main :: proc() {
 	}
 }
 
-draw_rect :: proc(buffer: ^Buffer, pos_x, pos_y, w, h: u32, color: u32) {
+draw_rect :: proc(buffer: ^XBuffer, pos_x, pos_y, w, h: u32, color: u32) {
 	start_x := pos_x
 	end_x := pos_x + w
 	start_y := pos_y
@@ -195,7 +195,7 @@ draw_rect :: proc(buffer: ^Buffer, pos_x, pos_y, w, h: u32, color: u32) {
 	}
 }
 
-do_render :: proc(buffer: ^Buffer, box: Entity) {
+do_render :: proc(buffer: ^XBuffer, box: Entity) {
 	// draw bg
 	draw_rect(buffer, 0, 0, buffer.width, buffer.height, 0xff87de87)
 	// draw rect
