@@ -25,9 +25,11 @@ Window :: struct {
 	shm:                                 ^wl.shm,
 	frame:                               ^decor.frame,
 	state:                               decor.window_state,
+	buffer:                              ^Buffer,
 	configured_width, configured_height: int,
 	content_width, content_height:       int,
 	floating_width, floating_height:     int,
+	running:                             bool,
 }
 
 main :: proc() {
@@ -36,6 +38,7 @@ main :: proc() {
 	window.configured_height = 600
 	window.floating_width = 800
 	window.floating_height = 600
+	window.running = true
 
 	window.display = wl.display_connect(nil)
 	if window.display == nil {
@@ -48,8 +51,6 @@ main :: proc() {
 	registry := wl.display_get_registry(window.display)
 	wl.registry_add_listener(registry, &registry_listener, &window)
 	wl.display_roundtrip(window.display)
-	// TODO: do we need a 2nd roundtrip?
-	wl.display_roundtrip(window.display)
 
 	window.surface = wl.compositor_create_surface(window.compositor)
 	defer wl.surface_destroy(window.surface)
@@ -61,9 +62,16 @@ main :: proc() {
 	decor.frame_set_title(window.frame, "Handmade Odin")
 	decor.frame_map(window.frame)
 
-	for decor.dispatch(decor_instance, -1) >= 0 {
-
+	timeout := 16 // TODO: is this milliseconds?
+	for window.running {
+		if decor.dispatch(decor_instance, timeout) < 0 {
+			os.exit(1)
+		}
+		blue_offset += 1
+		green_offset += 2
+		// redraw(&window)
 	}
+
 }
 
 iface := decor.interface {
@@ -84,16 +92,13 @@ frame_iface := decor.frame_interface {
 
 handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration, data: rawptr) {
 	context = runtime.default_context()
-	width, height: int
-	window_state: decor.window_state
 	window := cast(^Window)data
 
-	if ok := decor.configuration_get_window_state(config, &window_state); !ok {
-		fmt.eprintfln("couldn't get window state: %v", window_state)
+	if ok := decor.configuration_get_window_state(config, &window.state); !ok {
+		fmt.eprintfln("couldn't get window state: %v", window.state)
 	}
 
-	window.state = window_state
-
+	width, height: int
 	if ok := decor.configuration_get_content_size(config, frame, &width, &height); !ok {
 		width = window.content_width
 		height = window.content_height
@@ -114,12 +119,14 @@ handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration,
 		window.floating_height = height
 	}
 
+	resize(window)
 	redraw(window)
 }
 
 handle_close :: proc "c" (frame: ^decor.frame, data: rawptr) {
-	context = runtime.default_context()
-	os.exit(0)
+	// context = runtime.default_context()
+	window := cast(^Window)data
+	window.running = false
 }
 
 handle_commit :: proc "c" (frame: ^decor.frame, data: rawptr) {
@@ -195,12 +202,17 @@ create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
 	return buffer
 }
 
+resize :: proc(window: ^Window) {
+	// linux.munmap(window.buffer.data, window.buffer.size)
+	// wl.buffer_destroy(window.buffer.wl_buffer)
+	// free(window.buffer)
+	window.buffer = create_shm_buffer(window)
+}
+
 redraw :: proc(window: ^Window) {
-	buffer := create_shm_buffer(window)
+	paint_buffer(window.buffer, window)
 
-	paint_buffer(buffer, window)
-
-	wl.surface_attach(window.surface, buffer.wl_buffer, 0, 0)
+	wl.surface_attach(window.surface, window.buffer.wl_buffer, 0, 0)
 	wl.surface_damage_buffer(
 		window.surface,
 		0,
@@ -211,14 +223,19 @@ redraw :: proc(window: ^Window) {
 	wl.surface_commit(window.surface)
 }
 
+blue_offset := 0
+green_offset := 0
 paint_buffer :: proc(buffer: ^Buffer, window: ^Window) {
 	pixels := slice.from_ptr(cast([^]u32)buffer.data, int(buffer.size / 4))
-	// draw checkerboard background
+	// draw gradient
 	for y in 0 ..< window.configured_height {
 		for x in 0 ..< window.configured_width {
+			blue := u8(x + blue_offset)
+			green := u8(y + green_offset)
 			index := y * window.configured_width + x
-			if (x + y / 16 * 16) % 32 < 16 do pixels[index] = 0xff666666
-			else do pixels[index] = 0xffeeeeee
+			pixels[index] = u32(green) << 8 | u32(blue)
+			// if (x + y / 16 * 16) % 32 < 16 do pixels[index] = 0xff666666
+			// else do pixels[index] = 0xffeeeeee
 		}
 	}
 }
@@ -229,7 +246,7 @@ buffer_listener := wl.buffer_listener {
 
 buffer_release :: proc "c" (data: rawptr, wl_buffer: ^wl.buffer) {
 	context = runtime.default_context()
-	buffer: ^Buffer = auto_cast data
+	buffer := cast(^Buffer)data
 	linux.munmap(buffer.data, buffer.size)
 	wl.buffer_destroy(buffer.wl_buffer)
 	free(buffer)
