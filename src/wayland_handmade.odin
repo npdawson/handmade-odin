@@ -11,11 +11,13 @@ import "core:sys/posix"
 
 import wl "shared:wayland"
 import decor "shared:wayland/ext/libdecor"
+import wp "shared:wayland/wp"
 
 Buffer :: struct {
-	wl_buffer: ^wl.buffer,
-	data:      rawptr,
-	size:      uint,
+	wl_buffer:     ^wl.buffer,
+	width, height: int,
+	data:          rawptr,
+	size:          uint,
 }
 
 Window :: struct {
@@ -25,10 +27,10 @@ Window :: struct {
 	shm:                                 ^wl.shm,
 	frame:                               ^decor.frame,
 	state:                               decor.window_state,
-	resize:                              bool,
+	viewporter:                          ^wp.viewporter,
+	viewport:                            ^wp.viewport,
 	buffer:                              ^Buffer,
 	configured_width, configured_height: int,
-	content_width, content_height:       int,
 	floating_width, floating_height:     int,
 	last_frame:                          uint,
 	offset:                              f64,
@@ -37,10 +39,6 @@ Window :: struct {
 
 main :: proc() {
 	window: Window
-	window.configured_width = 800
-	window.configured_height = 600
-	window.floating_width = 800
-	window.floating_height = 600
 	window.running = true
 
 	window.display = wl.display_connect(nil)
@@ -57,6 +55,11 @@ main :: proc() {
 
 	window.surface = wl.compositor_create_surface(window.compositor)
 	defer wl.surface_destroy(window.surface)
+
+	window.viewport = wp.viewporter_get_viewport(window.viewporter, window.surface)
+	defer wp.viewport_destroy(window.viewport)
+
+	create_shm_buffer(&window, 1280, 720)
 
 	decor_instance := decor.new(window.display, &iface)
 	window.frame = decor.decorate(decor_instance, window.surface, &frame_iface, &window)
@@ -99,8 +102,8 @@ handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration,
 
 	width, height: int
 	if ok := decor.configuration_get_content_size(config, frame, &width, &height); !ok {
-		width = window.content_width
-		height = window.content_height
+		width = window.buffer.width
+		height = window.buffer.height
 	}
 
 	width = (width == 0) ? window.floating_width : width
@@ -118,7 +121,8 @@ handle_configure :: proc "c" (frame: ^decor.frame, config: ^decor.configuration,
 		window.floating_height = height
 	}
 
-	window.resize = true
+	wp.viewport_set_destination(window.viewport, width, height)
+
 	draw_frame(window)
 }
 
@@ -154,15 +158,19 @@ registry_global :: proc "c" (
 		cast(^wl.compositor)wl.registry_bind(registry, name, &wl.compositor_interface, 6)
 	case wl.shm_interface.name:
 		window.shm = cast(^wl.shm)wl.registry_bind(registry, name, &wl.shm_interface, 1)
+	case wp.viewporter_interface.name:
+		window.viewporter =
+		cast(^wp.viewporter)wl.registry_bind(registry, name, &wp.viewporter_interface, 1)
+	case wp.viewport_interface.name:
+		fmt.println("viewport interface")
 	}
 }
 
 registry_global_remove :: proc "c" (data: rawptr, registry: ^wl.registry, name: uint) {}
 
-create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
-	if !window.resize { return window.buffer }
-	stride := window.configured_width * 4
-	size := stride * window.configured_height
+create_shm_buffer :: proc(window: ^Window, width, height: int) {
+	stride := width * 4
+	size := stride * height
 
 	name := fmt.caprintf("/wl_shm_%v", cast(uintptr)window.display) // needs to be random?
 	fd := posix.shm_open(name, {.RDWR, .CREAT, .EXCL}, {.IRUSR, .IWUSR})
@@ -170,54 +178,40 @@ create_shm_buffer :: proc(window: ^Window) -> ^Buffer {
 	defer posix.close(fd)
 	if fd < 0 {
 		fmt.eprintln("error: couldn't create shared memory.", posix.errno())
-		return nil
 	}
 
 	ret := posix.ftruncate(fd, auto_cast size)
 	if ret == .FAIL {
 		fmt.eprintln("error: couldn't do ftruncate on shared memory descriptor")
-		return nil
 	}
 
 	data_raw, err := linux.mmap(0, uint(size), {.READ, .WRITE}, {.SHARED}, auto_cast fd, 0)
 	if err != .NONE {
 		fmt.eprintln("error: couldn't map shared memory")
-		return nil
 	}
 
 	buffer := new(Buffer)
+	buffer.width = width
+	buffer.height = height
 	buffer.data = data_raw
 	buffer.size = uint(size)
 	pool := wl.shm_create_pool(window.shm, auto_cast fd, size)
 	defer wl.shm_pool_destroy(pool)
-	buffer.wl_buffer = wl.shm_pool_create_buffer(
-		pool,
-		0,
-		window.configured_width,
-		window.configured_height,
-		stride,
-		.xrgb8888,
-	)
+	buffer.wl_buffer = wl.shm_pool_create_buffer(pool, 0, width, height, stride, .xrgb8888)
 
 	wl.buffer_add_listener(buffer.wl_buffer, &buffer_listener, buffer)
-	window.resize = false
+	// TODO: figure out how to properly set the source rectangle
+	// wp.viewport_set_source(window.viewport, 0, 0, i32(buffer.width), i32(buffer.height))
 	window.buffer = buffer
-	return buffer
 }
 
 draw_frame :: proc(window: ^Window) {
-	buffer := create_shm_buffer(window)
+	buffer := window.buffer
 
 	paint_buffer(buffer, window)
 
 	wl.surface_attach(window.surface, buffer.wl_buffer, 0, 0)
-	wl.surface_damage_buffer(
-		window.surface,
-		0,
-		0,
-		window.configured_width,
-		window.configured_height,
-	)
+	wl.surface_damage_buffer(window.surface, 0, 0, buffer.width, buffer.height)
 	wl.surface_commit(window.surface)
 }
 
@@ -233,7 +227,7 @@ frame_done :: proc "c" (data: rawptr, cb: ^wl.callback, time: uint) {
 	// update at specific delta time
 	if window.last_frame != 0 {
 		elapsed := time - window.last_frame
-		window.offset += f64(elapsed) / 1000 * 24 // 24 pixels? per second
+		window.offset += f64(elapsed) / 1000 * 60 // pixels? per second
 	}
 
 	// submit a frame
@@ -251,9 +245,9 @@ paint_buffer :: proc(buffer: ^Buffer, window: ^Window) {
 	blue_offset := int(window.offset)
 	green_offset := int(window.offset) * 2
 	// draw gradient
-	for y in 0 ..< window.configured_height {
-		for x in 0 ..< window.configured_width {
-			index := y * window.configured_width + x
+	for y in 0 ..< buffer.height {
+		for x in 0 ..< buffer.width {
+			index := y * buffer.width + x
 			blue := (x + blue_offset) & 0xff
 			green := (y + green_offset) & 0xff
 			pixels[index] = u32(green << 8 | blue)
